@@ -36,10 +36,10 @@ provider "unionai" {
 
 ## Authentication
 
-The provider supports authentication via API key. You can obtain an API key using the Union CLI:
+The provider supports authentication via API key. You can obtain an API key using the `flyte` CLI:
 
 ```bash
-union create api-key admin --name "terraform-api-key"
+flyte create api-key --name "terraform-api-key"
 ```
 
 The API key can be provided in two ways:
