@@ -17,10 +17,10 @@ Before you begin, ensure you have:
 
 ## Step 1: Create an API Key
 
-First, create an API key using the Union CLI:
+First, create an API key using the `flyte` CLI:
 
 ```bash
-union create api-key admin --name "terraform-api-key"
+flyte create api-key --name "terraform-api-key"
 ```
 
 Save the generated API key securely. You'll need it to authenticate the provider.
