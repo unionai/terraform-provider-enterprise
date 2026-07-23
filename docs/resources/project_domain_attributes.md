@@ -9,9 +9,13 @@ description: |-
 
 Manages the cluster resource attributes (matchable attributes of type `CLUSTER_RESOURCE`) for a project-domain pair.
 
-The attribute map is substituted into the cluster resource templates that Flyte renders for the project-domain namespace. The most common use is setting `defaultUserRoleValue` to bind a per-project IAM role to the namespace's default ServiceAccount, giving each project-domain its own scoped cloud identity.
+The attribute map is substituted into the cluster resource templates that Flyte renders for the project-domain namespace. One use case is setting `defaultUserRoleValue` to bind a per-project IAM role to the namespace's default ServiceAccount, giving each project-domain its own scoped cloud identity.
+
+Another use case is setting project-domain resource quotas. Quota values are passed as cluster resource template variables, such as `projectQuotaCpu`, `projectQuotaMemory`, and `projectQuotaNvidiaGpu`.
 
 ## Example Usage
+
+### Per-project IAM role
 
 ```terraform
 resource "unionai_project" "test" {
@@ -31,13 +35,32 @@ resource "unionai_project_domain_attributes" "test" {
 }
 ```
 
+### Project-domain resource quotas
+
+Set resource quotas for a specific project and domain by passing the quota template variables in `attributes`:
+
+```terraform
+resource "unionai_project_domain_attributes" "development_quotas" {
+  project = "my-project"
+  domain  = "development"
+
+  attributes = {
+    projectQuotaCpu       = "2"
+    projectQuotaMemory    = "2Gi"
+    projectQuotaNvidiaGpu = "1"
+  }
+}
+```
+
+The quota values are strings and should use the quantity formats expected by the cluster resource templates. For example, memory values can use Kubernetes-style quantities such as `2Gi`.
+
 ## Schema
 
 ### Required
 
 - `project` (String) Project identifier the attributes apply to.
 - `domain` (String) Domain the attributes apply to (e.g. `development`, `staging`, `production`).
-- `attributes` (Map of String) Cluster resource template variables to substitute, as case-sensitive key/value pairs (e.g. `{ defaultUserRoleValue = "arn:aws:iam::123456789012:role/my-role" }`).
+- `attributes` (Map of String) Cluster resource template variables to substitute, as case-sensitive key/value pairs. Common examples include `defaultUserRoleValue` for a project-domain IAM role and quota keys such as `projectQuotaCpu`, `projectQuotaMemory`, and `projectQuotaNvidiaGpu`.
 
 ### Read-Only
 
