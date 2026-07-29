@@ -69,6 +69,7 @@ operations on resources in the allowed organizations.
 - `unionai_application` - Manage OAuth applications
 - `unionai_user_access` - Assign policies to users
 - `unionai_application_access` - Assign policies to applications
+- `unionai_queue` - Manage queues (concurrency, priority, fairness, cluster routing)
 
 ## Available Data Sources
 
@@ -81,6 +82,7 @@ operations on resources in the allowed organizations.
 - `unionai_dataplane` - Read dataplane information
 - `unionai_dataplanes` - List all dataplanes
 - `unionai_controlplane` - Read controlplane information
+- `unionai_queue` - Read queue information
 
 ## Developer Setup
 

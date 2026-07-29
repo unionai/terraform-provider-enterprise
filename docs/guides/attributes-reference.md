@@ -166,6 +166,43 @@ output "project_info" {
 
 ---
 
+### unionai_queue
+
+**Inputs:**
+- `name` (String, Required) - Queue name (forces replacement)
+- `clusters` (Set of String, Required) - Clusters to route to; `["*"]` means all healthy clusters in the pool
+- `cluster_pool_name` (String, Optional) - Cluster pool, defaults to `default` (cannot be changed after creation)
+- `run_concurrency` (Number, Optional) - Max concurrent runs, `0` = unlimited
+- `action_concurrency` (Number, Optional) - Max in-flight actions, `0` = unlimited
+- `depth` (Number, Optional) - Max queued items, `0` = unlimited
+- `priority` (String, Optional) - `min`, `medium` (default), or `max`
+- `fairness` (String, Optional) - `round_robin` (default) or `shuffle_interleave`
+
+**Outputs:**
+- `id` (String) - Queue identifier, same as `name`
+- `state` (String) - `active`, `draining`, or `drained`
+- `available_clusters` (Set of String) - Clusters currently routable, filtered to active and healthy
+- `created_at` (String) - Creation timestamp, RFC 3339
+- `updated_at` (String) - Last update timestamp, RFC 3339
+
+**Example Output Usage:**
+```terraform
+output "queue_state" {
+  value = unionai_queue.example.state
+}
+
+output "queue_routing" {
+  value = {
+    pool      = unionai_queue.example.cluster_pool_name
+    available = unionai_queue.example.available_clusters
+  }
+}
+```
+
+**Note:** `terraform destroy` drains a queue rather than deleting it — the name stays reserved. Use `terraform import` to re-adopt it.
+
+---
+
 ### unionai_role
 
 **Inputs:**
@@ -428,6 +465,33 @@ data "unionai_project" "example" {
 
 output "project_domains" {
   value = data.unionai_project.example.domain_ids
+}
+```
+
+---
+
+### data.unionai_queue
+
+**Inputs:**
+- `id` (String, Required) - Queue name
+
+**Outputs:**
+- `cluster_pool_name` (String) - Cluster pool this queue routes into
+- `clusters` (Set of String) - Clusters this queue routes to
+- `run_concurrency` (Number) - Max concurrent runs, `0` = unlimited
+- `action_concurrency` (Number) - Max in-flight actions, `0` = unlimited
+- `depth` (Number) - Max queued items, `0` = unlimited
+- `priority` (String) - `min`, `medium`, or `max`
+- `fairness` (String) - `round_robin` or `shuffle_interleave`
+- `state` (String) - `active`, `draining`, or `drained`
+- `available_clusters` (Set of String) - Clusters currently routable, filtered to active and healthy
+- `created_at` (String) - Creation timestamp, RFC 3339
+- `updated_at` (String) - Last update timestamp, RFC 3339
+
+**Example Output Usage:**
+```terraform
+output "queue_state" {
+  value = data.unionai_queue.example.state
 }
 ```
 
