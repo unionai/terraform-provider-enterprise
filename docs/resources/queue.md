@@ -15,6 +15,20 @@ Queues are organization-scoped — a queue name is unique within the organizatio
 
 ~> **The `default` queue cannot be drained**, and neither can a queue referenced as `run.default_queue` in settings at any scope. Update or unset those settings before destroying such a queue.
 
+### What `terraform destroy` reports
+
+A queue always outlives the Terraform resource, so destroy is never silent. It emits one of these warnings and then removes the resource from state:
+
+| Situation | Warning | Outcome |
+| --- | --- | --- |
+| Queue drained successfully | `Queue drained, not deleted` | Queue is `draining`, name reserved |
+| Queue was already `draining` or `drained` | `Queue already retired, not deleted` | No change made, name reserved |
+| Control plane does not support draining yet | `Queue could not be drained` | **Queue is still `active` and keeps accepting work** |
+
+Destroy fails, and the resource stays in state, only when the control plane actively refuses the drain — for the `default` queue, or a queue still referenced as `run.default_queue`.
+
+The third row is a transitional case: while queue draining is being rolled out, `UpdateQueueState` may not be served yet. Rather than blocking teardown of every stack that contains a queue, the provider releases the resource and warns that the queue was left running, so you can retire it by hand. Once draining is enabled this path stops firing on its own, with no configuration change.
+
 ## Example Usage
 
 ### Basic queue

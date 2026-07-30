@@ -360,7 +360,16 @@ func (r *QueueResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 
 	switch got.GetQueue().GetStatus().GetState() {
 	case queue.QueueState_QUEUE_STATE_DRAINING, queue.QueueState_QUEUE_STATE_DRAINED:
-		// Already retired; nothing to do.
+		// Already retired, so there is nothing to drain — but the queue itself survives, and
+		// callers need to know that before they try to recreate it.
+		resp.Diagnostics.AddWarning(
+			"Queue already retired, not deleted",
+			fmt.Sprintf(
+				"Queue %q was already draining or drained, so no change was made. It was removed from Terraform "+
+					"state but still exists in organization %q. %s",
+				name, r.org, queueNameReservedNote,
+			),
+		)
 		return
 	}
 
@@ -371,6 +380,20 @@ func (r *QueueResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	if err != nil {
 		switch status.Code(err) {
 		case codes.NotFound:
+			return
+		case codes.Unimplemented, codes.Unavailable:
+			// Draining is still being rolled out. Failing here would block teardown of any
+			// stack containing a queue, so release the resource and say plainly what was left
+			// behind. Once the control plane serves UpdateQueueState this path stops firing.
+			resp.Diagnostics.AddWarning(
+				"Queue could not be drained",
+				fmt.Sprintf(
+					"This control plane does not yet support draining queues (%s). Queue %q was removed from "+
+						"Terraform state but still exists in organization %q and is still active — it will keep "+
+						"accepting work. Retire it manually once draining is enabled. %s",
+					status.Code(err), name, r.org, queueNameReservedNote,
+				),
+			)
 			return
 		case codes.FailedPrecondition:
 			resp.Diagnostics.AddError(
@@ -393,8 +416,8 @@ func (r *QueueResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		"Queue drained, not deleted",
 		fmt.Sprintf(
 			"The Union API has no DeleteQueue operation. Queue %q was set to draining and removed from Terraform "+
-				"state, but it still exists in organization %q and its name remains reserved.",
-			name, r.org,
+				"state, but it still exists in organization %q. %s",
+			name, r.org, queueNameReservedNote,
 		),
 	)
 }

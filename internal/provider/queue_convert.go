@@ -23,6 +23,11 @@ const defaultClusterPoolName = "default"
 // it must be the only entry in the cluster list.
 const wildcardCluster = "*"
 
+// queueNameReservedNote spells out the consequence shared by every destroy path where the queue
+// outlives the Terraform resource: the name stays taken, so recreating it needs an import.
+const queueNameReservedNote = "Its name remains reserved, so a later apply of the same configuration will fail with an " +
+	"\"already exists\" error — use `terraform import` to adopt it again."
+
 const (
 	priorityPrefix = "PRIORITY_"
 	fairnessPrefix = "FAIRNESS_ALGORITHM_"

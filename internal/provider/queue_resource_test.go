@@ -384,6 +384,42 @@ func TestQueueResource_DeleteDrains(t *testing.T) {
 	}
 }
 
+// Draining is still being rolled out; until it lands, destroy must not wedge a stack.
+func TestQueueResource_DeleteWhenDrainUnsupportedReleasesState(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unimplemented, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			r := &QueueResource{
+				org: "acme",
+				conn: &mockQueueClient{
+					getFn: func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error) {
+						return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
+					},
+					updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
+						return nil, status.Error(code, "drain not available")
+					},
+				},
+			}
+
+			resp := &resource.DeleteResponse{State: newQueueState(t, "batch")}
+			r.Delete(context.Background(), resource.DeleteRequest{State: newQueueState(t, "batch")}, resp)
+
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("expected destroy to succeed when draining is unsupported, got: %v", resp.Diagnostics.Errors())
+			}
+			if resp.Diagnostics.WarningsCount() == 0 {
+				t.Fatal("expected a warning explaining the queue was left behind")
+			}
+			detail := resp.Diagnostics.Warnings()[0].Detail()
+			if !strings.Contains(detail, "still active") {
+				t.Errorf("expected the warning to say the queue is still active, got: %s", detail)
+			}
+			if !strings.Contains(detail, "terraform import") {
+				t.Errorf("expected the warning to mention terraform import, got: %s", detail)
+			}
+		})
+	}
+}
+
 func TestQueueResource_DeleteAlreadyDrainedIsNoOp(t *testing.T) {
 	r := &QueueResource{
 		org: "acme",
@@ -403,6 +439,13 @@ func TestQueueResource_DeleteAlreadyDrainedIsNoOp(t *testing.T) {
 
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("Delete() errors: %v", resp.Diagnostics.Errors())
+	}
+	// The queue still exists even though we did not touch it, so the name is still taken.
+	if resp.Diagnostics.WarningsCount() == 0 {
+		t.Fatal("expected a warning that the already-retired queue still exists")
+	}
+	if detail := resp.Diagnostics.Warnings()[0].Detail(); !strings.Contains(detail, "terraform import") {
+		t.Errorf("expected the warning to mention terraform import, got: %s", detail)
 	}
 }
 
