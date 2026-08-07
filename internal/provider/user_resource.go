@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -245,6 +244,4 @@ func (r *UserResource) ImportState(ctx context.Context, req resource.ImportState
 		LastName:  types.StringValue(user.Spec.LastName),
 		Email:     types.StringValue(user.Spec.Email),
 	})
-
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
