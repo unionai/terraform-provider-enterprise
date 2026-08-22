@@ -38,9 +38,11 @@ type QueueDataSourceModel struct {
 	Priority          types.String `tfsdk:"priority"`
 	Fairness          types.String `tfsdk:"fairness"`
 	State             types.String `tfsdk:"state"`
+	ClusterManaged    types.Bool   `tfsdk:"cluster_managed"`
 	AvailableClusters types.Set    `tfsdk:"available_clusters"`
 	CreatedAt         types.String `tfsdk:"created_at"`
 	UpdatedAt         types.String `tfsdk:"updated_at"`
+	DeletedAt         types.String `tfsdk:"deleted_at"`
 }
 
 func (d *QueueDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -90,6 +92,10 @@ func (d *QueueDataSource) Schema(ctx context.Context, req datasource.SchemaReque
 				Computed:            true,
 				MarkdownDescription: "Queue lifecycle state: `active`, `draining`, or `drained`.",
 			},
+			"cluster_managed": schema.BoolAttribute{
+				Computed:            true,
+				MarkdownDescription: "Whether this queue is the implicit queue owned by a cluster with the same name.",
+			},
 			"available_clusters": schema.SetAttribute{
 				Computed:            true,
 				ElementType:         types.StringType,
@@ -102,6 +108,10 @@ func (d *QueueDataSource) Schema(ctx context.Context, req datasource.SchemaReque
 			"updated_at": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Last update timestamp, RFC 3339.",
+			},
+			"deleted_at": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Soft-deletion timestamp, RFC 3339. Null for live queues.",
 			},
 		},
 	}
@@ -164,12 +174,14 @@ func (d *QueueDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	data.Priority = queuePriorityToTerraform(spec.GetPriority())
 	data.Fairness = queueFairnessToTerraform(spec.GetFairness())
 	data.State = queueStateToTerraform(q.GetStatus().GetState())
+	data.ClusterManaged = types.BoolValue(q.GetStatus().GetClusterManaged())
 	data.AvailableClusters = convertArrayToSetGetter(
 		q.GetStatus().GetAvailableClusters(),
 		func(c *common.ClusterIdentifier) string { return c.GetName() },
 	)
 	data.CreatedAt = timestampToTerraform(q.GetCreatedAt())
 	data.UpdatedAt = timestampToTerraform(q.GetUpdatedAt())
+	data.DeletedAt = timestampToTerraform(q.GetDeletedAt())
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

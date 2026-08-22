@@ -41,6 +41,8 @@ output "batch_queue_clusters" {
 - `priority` (String) Scheduling priority relative to other queues: `min`, `medium`, or `max`.
 - `fairness` (String) Cross-project scheduling policy within this queue: `round_robin` or `shuffle_interleave`.
 - `state` (String) Queue lifecycle state: `active`, `draining`, or `drained`.
+- `cluster_managed` (Boolean) Whether this queue is the implicit queue owned by a cluster with the same name.
 - `available_clusters` (Set of String) Names of the clusters this queue can currently route to, after filtering down to those that are active and healthy.
 - `created_at` (String) Creation timestamp, RFC 3339.
 - `updated_at` (String) Last update timestamp, RFC 3339.
+- `deleted_at` (String) Soft-deletion timestamp, RFC 3339. Null for live queues.

@@ -171,19 +171,22 @@ output "project_info" {
 **Inputs:**
 - `name` (String, Required) - Queue name (forces replacement)
 - `clusters` (Set of String, Required) - Clusters to route to; `["*"]` means all healthy clusters in the pool
-- `cluster_pool_name` (String, Optional) - Cluster pool, defaults to `default` (cannot be changed after creation)
+- `cluster_pool_name` (String, Optional) - Cluster pool, defaults to `default` (can only be changed while the queue is drained)
 - `run_concurrency` (Number, Optional) - Max concurrent runs, `0` = unlimited
 - `action_concurrency` (Number, Optional) - Max in-flight actions, `0` = unlimited
 - `depth` (Number, Optional) - Max queued items, `0` = unlimited
 - `priority` (String, Optional) - `min`, `medium` (default), or `max`
 - `fairness` (String, Optional) - `round_robin` (default) or `shuffle_interleave`
+- `drain` (Boolean, Optional) - Request draining before deleting the queue; defaults to `false`
 
 **Outputs:**
 - `id` (String) - Queue identifier, same as `name`
 - `state` (String) - `active`, `draining`, or `drained`
+- `cluster_managed` (Boolean) - Whether this queue is owned by a cluster with the same name
 - `available_clusters` (Set of String) - Clusters currently routable, filtered to active and healthy
 - `created_at` (String) - Creation timestamp, RFC 3339
 - `updated_at` (String) - Last update timestamp, RFC 3339
+- `deleted_at` (String) - Soft-deletion timestamp, RFC 3339; null for live queues
 
 **Example Output Usage:**
 ```terraform
@@ -199,7 +202,7 @@ output "queue_routing" {
 }
 ```
 
-**Note:** `terraform destroy` drains a queue rather than deleting it — the name stays reserved. Use `terraform import` to re-adopt it.
+**Note:** Set `drain = true` and apply before deleting a queue. Once computed `state` reaches `drained`, `terraform destroy` soft-deletes the queue.
 
 ---
 

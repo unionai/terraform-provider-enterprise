@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -45,10 +46,13 @@ type QueueResourceModel struct {
 	Depth             types.Int64  `tfsdk:"depth"`
 	Priority          types.String `tfsdk:"priority"`
 	Fairness          types.String `tfsdk:"fairness"`
+	Drain             types.Bool   `tfsdk:"drain"`
 	State             types.String `tfsdk:"state"`
+	ClusterManaged    types.Bool   `tfsdk:"cluster_managed"`
 	AvailableClusters types.Set    `tfsdk:"available_clusters"`
 	CreatedAt         types.String `tfsdk:"created_at"`
 	UpdatedAt         types.String `tfsdk:"updated_at"`
+	DeletedAt         types.String `tfsdk:"deleted_at"`
 }
 
 func (r *QueueResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -79,7 +83,7 @@ func (r *QueueResource) Schema(ctx context.Context, req resource.SchemaRequest, 
 				Optional:            true,
 				Computed:            true,
 				Default:             stringdefault.StaticString(defaultClusterPoolName),
-				MarkdownDescription: "Cluster pool this queue routes into. Defaults to `default`, which is created on demand; any other pool must already exist. Cannot be changed after creation.",
+				MarkdownDescription: "Cluster pool this queue routes into. Defaults to `default`, which is created on demand; any other pool must already exist. Can only be changed while the queue is drained.",
 			},
 			"clusters": schema.SetAttribute{
 				Required:            true,
@@ -116,9 +120,19 @@ func (r *QueueResource) Schema(ctx context.Context, req resource.SchemaRequest, 
 				Default:             stringdefault.StaticString("round_robin"),
 				MarkdownDescription: "Cross-project scheduling policy within this queue: `round_robin` or `shuffle_interleave`. The unit of fairness is per-project.",
 			},
+			"drain": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "When true, request that the queue stop accepting new work and drain existing work. Terraform reports progress through the computed `state` attribute.",
+			},
 			"state": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Queue lifecycle state: `active`, `draining`, or `drained`. Managed by the control plane; `terraform destroy` moves the queue to `draining`.",
+				MarkdownDescription: "Queue lifecycle state: `active`, `draining`, or `drained`. Managed by the control plane.",
+			},
+			"cluster_managed": schema.BoolAttribute{
+				Computed:            true,
+				MarkdownDescription: "Whether this queue is the implicit queue owned by a cluster with the same name. Cluster-managed queues cannot move cluster pool or routing independently of that cluster.",
 			},
 			"available_clusters": schema.SetAttribute{
 				Computed:            true,
@@ -135,6 +149,10 @@ func (r *QueueResource) Schema(ctx context.Context, req resource.SchemaRequest, 
 			"updated_at": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Last update timestamp, RFC 3339.",
+			},
+			"deleted_at": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Soft-deletion timestamp, RFC 3339. Null for live queues.",
 			},
 		},
 	}
@@ -161,10 +179,9 @@ func (r *QueueResource) Configure(ctx context.Context, req resource.ConfigureReq
 	r.org = client.org
 }
 
-// ModifyPlan rejects a cluster pool change at plan time. The control plane refuses to move a
-// queue between pools, and RequiresReplace is not an option here: destroy only drains a queue,
-// so a replace cycle would leave the old queue in place and the create would fail with
-// AlreadyExists.
+// ModifyPlan rejects cluster pool changes the control plane would reject. A drained queue can
+// be moved to another pool, but active/draining queues must finish draining first, and
+// cluster-managed queues cannot be repointed independently of their cluster.
 func (r *QueueResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
 		// Create or destroy; nothing to compare.
@@ -183,14 +200,30 @@ func (r *QueueResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanR
 	}
 
 	if plan.ClusterPoolName.ValueString() != state.ClusterPoolName.ValueString() {
+		if state.ClusterManaged.ValueBool() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("cluster_pool_name"),
+				"Cluster-managed queue cannot change cluster pool",
+				fmt.Sprintf(
+					"Queue %q is managed by a cluster with the same name. Move the cluster to change its co-named queue's pool and routing.",
+					state.Name.ValueString(),
+				),
+			)
+			return
+		}
+
+		if state.State.ValueString() == "drained" {
+			return
+		}
+
 		resp.Diagnostics.AddAttributeError(
 			path.Root("cluster_pool_name"),
-			"Queue cluster pool cannot be changed",
+			"Queue cluster pool cannot be changed while queue is active",
 			fmt.Sprintf(
-				"The control plane does not permit moving queue %q from cluster pool %q to %q. "+
-					"Remove the queue from your configuration and add it back under the new pool with a different name — "+
-					"note that destroying a queue only drains it, so the original name stays reserved.",
+				"The control plane does not permit moving queue %q from cluster pool %q to %q while it is %s. "+
+					"Drain the queue first, then apply the pool change.",
 				state.Name.ValueString(), state.ClusterPoolName.ValueString(), plan.ClusterPoolName.ValueString(),
+				state.State.ValueString(),
 			),
 		)
 	}
@@ -218,6 +251,9 @@ func (r *QueueResource) Create(ctx context.Context, req resource.CreateRequest, 
 		Id:    r.queueId(data.Name.ValueString()),
 		Spec:  spec,
 		State: queue.QueueState_QUEUE_STATE_ACTIVE,
+	}
+	if data.Drain.ValueBool() {
+		createRequest.State = queue.QueueState_QUEUE_STATE_DRAINED
 	}
 
 	tflog.Debug(ctx, "CreateQueue request", map[string]interface{}{
@@ -323,7 +359,13 @@ func (r *QueueResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	resp.Diagnostics.Append(applyQueueToModel(&data, updated.GetQueue())...)
+	q, err := r.applyDrainIntent(ctx, data.Name.ValueString(), updated.GetQueue(), data.Drain.ValueBool())
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", err.Error())
+		return
+	}
+
+	resp.Diagnostics.Append(applyQueueToModel(&data, q)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -332,9 +374,8 @@ func (r *QueueResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-// Delete drains the queue. The Union API has no DeleteQueue operation: a queue is retired by
-// moving it to DRAINING, which the control plane advances to DRAINED once in-flight work
-// finishes. The queue row — and its name — persist.
+// Delete drains the queue, then soft-deletes it once the control plane reports DRAINED. The
+// queue name remains reserved until the queue is undeleted.
 func (r *QueueResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data QueueResourceModel
 
@@ -358,68 +399,126 @@ func (r *QueueResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 
-	switch got.GetQueue().GetStatus().GetState() {
-	case queue.QueueState_QUEUE_STATE_DRAINING, queue.QueueState_QUEUE_STATE_DRAINED:
-		// Already retired, so there is nothing to drain — but the queue itself survives, and
-		// callers need to know that before they try to recreate it.
-		resp.Diagnostics.AddWarning(
-			"Queue already retired, not deleted",
+	if got.GetQueue().GetDeletedAt() != nil {
+		return
+	}
+
+	state := got.GetQueue().GetStatus().GetState()
+	if state == queue.QueueState_QUEUE_STATE_ACTIVE {
+		if !data.Drain.ValueBool() {
+			resp.Diagnostics.AddError(
+				"Queue must be drained before destroy",
+				fmt.Sprintf(
+					"Queue %q is active. Set `drain = true` on the resource and apply first. "+
+						"Once the computed `state` reaches `drained`, run destroy again.",
+					name,
+				),
+			)
+			return
+		}
+
+		updated, err := r.conn.UpdateQueueState(ctx, &queue.UpdateQueueStateRequest{
+			Id:    r.queueId(name),
+			State: queue.QueueState_QUEUE_STATE_DRAINING,
+		})
+		if err != nil {
+			switch status.Code(err) {
+			case codes.NotFound:
+				return
+			case codes.FailedPrecondition:
+				resp.Diagnostics.AddError(
+					"Unable to drain queue",
+					fmt.Sprintf(
+						"The control plane refused to drain queue %q: %s\n\n"+
+							"This usually means the queue is referenced as run.default_queue in settings at one or more scopes. "+
+							"Update or unset those settings first.",
+						name, err,
+					),
+				)
+				return
+			default:
+				resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to drain queue, got error: %s", err))
+				return
+			}
+		}
+		state = updated.GetQueue().GetStatus().GetState()
+	}
+
+	if state != queue.QueueState_QUEUE_STATE_DRAINED {
+		resp.Diagnostics.AddError(
+			"Queue is not drained",
 			fmt.Sprintf(
-				"Queue %q was already draining or drained, so no change was made. It was removed from Terraform "+
-					"state but still exists in organization %q. %s",
-				name, r.org, queueNameReservedNote,
+				"Queue %q is %s. The control plane only deletes drained queues. Wait until "+
+					"the computed `state` reaches `drained`, then run destroy again.",
+				name, queueStateToTerraform(state).ValueString(),
 			),
 		)
 		return
 	}
 
-	_, err = r.conn.UpdateQueueState(ctx, &queue.UpdateQueueStateRequest{
-		Id:    r.queueId(name),
-		State: queue.QueueState_QUEUE_STATE_DRAINING,
-	})
+	_, err = r.conn.DeleteQueue(ctx, &queue.DeleteQueueRequest{Id: r.queueId(name)})
 	if err != nil {
 		switch status.Code(err) {
 		case codes.NotFound:
 			return
-		case codes.Unimplemented, codes.Unavailable:
-			// Draining is still being rolled out. Failing here would block teardown of any
-			// stack containing a queue, so release the resource and say plainly what was left
-			// behind. Once the control plane serves UpdateQueueState this path stops firing.
-			resp.Diagnostics.AddWarning(
-				"Queue could not be drained",
-				fmt.Sprintf(
-					"This control plane does not yet support draining queues (%s). Queue %q was removed from "+
-						"Terraform state but still exists in organization %q and is still active — it will keep "+
-						"accepting work. Retire it manually once draining is enabled. %s",
-					status.Code(err), name, r.org, queueNameReservedNote,
-				),
-			)
-			return
 		case codes.FailedPrecondition:
 			resp.Diagnostics.AddError(
-				"Unable to drain queue",
+				"Unable to delete queue",
 				fmt.Sprintf(
-					"The control plane refused to drain queue %q: %s\n\n"+
-						"This usually means the queue is the organization default queue, or it is referenced as "+
-						"run.default_queue in settings at one or more scopes. Update or unset those settings first.",
+					"The control plane refused to delete queue %q: %s\n\n"+
+						"Queues can only be deleted after they are drained, and queues referenced as run.default_queue "+
+						"must be unset from settings first.",
 					name, err,
 				),
 			)
 			return
 		default:
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to drain queue, got error: %s", err))
+			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete queue, got error: %s", err))
 			return
 		}
 	}
 
 	resp.Diagnostics.AddWarning(
-		"Queue drained, not deleted",
+		"Queue soft-deleted",
 		fmt.Sprintf(
-			"The Union API has no DeleteQueue operation. Queue %q was set to draining and removed from Terraform "+
-				"state, but it still exists in organization %q. %s",
+			"Queue %q was soft-deleted in organization %q. %s",
 			name, r.org, queueNameReservedNote,
 		),
 	)
+}
+
+func (r *QueueResource) applyDrainIntent(ctx context.Context, name string, q *queue.Queue, drain bool) (*queue.Queue, error) {
+	if q == nil {
+		return nil, fmt.Errorf("the control plane returned an empty queue")
+	}
+
+	current := q.GetStatus().GetState()
+	if drain {
+		if current == queue.QueueState_QUEUE_STATE_ACTIVE {
+			resp, err := r.conn.UpdateQueueState(ctx, &queue.UpdateQueueStateRequest{
+				Id:    r.queueId(name),
+				State: queue.QueueState_QUEUE_STATE_DRAINING,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("unable to drain queue, got error: %w", err)
+			}
+			return resp.GetQueue(), nil
+		}
+		return q, nil
+	}
+
+	if current == queue.QueueState_QUEUE_STATE_DRAINING || current == queue.QueueState_QUEUE_STATE_DRAINED {
+		resp, err := r.conn.UpdateQueueState(ctx, &queue.UpdateQueueStateRequest{
+			Id:    r.queueId(name),
+			State: queue.QueueState_QUEUE_STATE_ACTIVE,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("unable to activate queue, got error: %w", err)
+		}
+		return resp.GetQueue(), nil
+	}
+
+	return q, nil
 }
 
 func (r *QueueResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

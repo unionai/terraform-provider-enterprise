@@ -93,6 +93,8 @@ func (m *QueueStatus) validate(all bool) error {
 
 	}
 
+	// no validation rules for ClusterManaged
+
 	if len(errors) > 0 {
 		return QueueStatusMultiError(errors)
 	}
@@ -330,6 +332,35 @@ func (m *Queue) validate(all bool) error {
 		if err := v.Validate(); err != nil {
 			return QueueValidationError{
 				field:  "UpdatedAt",
+				reason: "embedded message failed validation",
+				cause:  err,
+			}
+		}
+	}
+
+	if all {
+		switch v := interface{}(m.GetDeletedAt()).(type) {
+		case interface{ ValidateAll() error }:
+			if err := v.ValidateAll(); err != nil {
+				errors = append(errors, QueueValidationError{
+					field:  "DeletedAt",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		case interface{ Validate() error }:
+			if err := v.Validate(); err != nil {
+				errors = append(errors, QueueValidationError{
+					field:  "DeletedAt",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		}
+	} else if v, ok := interface{}(m.GetDeletedAt()).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			return QueueValidationError{
+				field:  "DeletedAt",
 				reason: "embedded message failed validation",
 				cause:  err,
 			}
@@ -1793,6 +1824,501 @@ var _ interface {
 	ErrorName() string
 } = UpdateQueueStateResponseValidationError{}
 
+// Validate checks the field values on DeleteQueueRequest with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the first error encountered is returned, or nil if there are no violations.
+func (m *DeleteQueueRequest) Validate() error {
+	return m.validate(false)
+}
+
+// ValidateAll checks the field values on DeleteQueueRequest with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the result is a list of violation errors wrapped in
+// DeleteQueueRequestMultiError, or nil if none found.
+func (m *DeleteQueueRequest) ValidateAll() error {
+	return m.validate(true)
+}
+
+func (m *DeleteQueueRequest) validate(all bool) error {
+	if m == nil {
+		return nil
+	}
+
+	var errors []error
+
+	if all {
+		switch v := interface{}(m.GetId()).(type) {
+		case interface{ ValidateAll() error }:
+			if err := v.ValidateAll(); err != nil {
+				errors = append(errors, DeleteQueueRequestValidationError{
+					field:  "Id",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		case interface{ Validate() error }:
+			if err := v.Validate(); err != nil {
+				errors = append(errors, DeleteQueueRequestValidationError{
+					field:  "Id",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		}
+	} else if v, ok := interface{}(m.GetId()).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			return DeleteQueueRequestValidationError{
+				field:  "Id",
+				reason: "embedded message failed validation",
+				cause:  err,
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return DeleteQueueRequestMultiError(errors)
+	}
+
+	return nil
+}
+
+// DeleteQueueRequestMultiError is an error wrapping multiple validation errors
+// returned by DeleteQueueRequest.ValidateAll() if the designated constraints
+// aren't met.
+type DeleteQueueRequestMultiError []error
+
+// Error returns a concatenation of all the error messages it wraps.
+func (m DeleteQueueRequestMultiError) Error() string {
+	msgs := make([]string, 0, len(m))
+	for _, err := range m {
+		msgs = append(msgs, err.Error())
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// AllErrors returns a list of validation violation errors.
+func (m DeleteQueueRequestMultiError) AllErrors() []error { return m }
+
+// DeleteQueueRequestValidationError is the validation error returned by
+// DeleteQueueRequest.Validate if the designated constraints aren't met.
+type DeleteQueueRequestValidationError struct {
+	field  string
+	reason string
+	cause  error
+	key    bool
+}
+
+// Field function returns field value.
+func (e DeleteQueueRequestValidationError) Field() string { return e.field }
+
+// Reason function returns reason value.
+func (e DeleteQueueRequestValidationError) Reason() string { return e.reason }
+
+// Cause function returns cause value.
+func (e DeleteQueueRequestValidationError) Cause() error { return e.cause }
+
+// Key function returns key value.
+func (e DeleteQueueRequestValidationError) Key() bool { return e.key }
+
+// ErrorName returns error name.
+func (e DeleteQueueRequestValidationError) ErrorName() string {
+	return "DeleteQueueRequestValidationError"
+}
+
+// Error satisfies the builtin error interface
+func (e DeleteQueueRequestValidationError) Error() string {
+	cause := ""
+	if e.cause != nil {
+		cause = fmt.Sprintf(" | caused by: %v", e.cause)
+	}
+
+	key := ""
+	if e.key {
+		key = "key for "
+	}
+
+	return fmt.Sprintf(
+		"invalid %sDeleteQueueRequest.%s: %s%s",
+		key,
+		e.field,
+		e.reason,
+		cause)
+}
+
+var _ error = DeleteQueueRequestValidationError{}
+
+var _ interface {
+	Field() string
+	Reason() string
+	Key() bool
+	Cause() error
+	ErrorName() string
+} = DeleteQueueRequestValidationError{}
+
+// Validate checks the field values on DeleteQueueResponse with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the first error encountered is returned, or nil if there are no violations.
+func (m *DeleteQueueResponse) Validate() error {
+	return m.validate(false)
+}
+
+// ValidateAll checks the field values on DeleteQueueResponse with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the result is a list of violation errors wrapped in
+// DeleteQueueResponseMultiError, or nil if none found.
+func (m *DeleteQueueResponse) ValidateAll() error {
+	return m.validate(true)
+}
+
+func (m *DeleteQueueResponse) validate(all bool) error {
+	if m == nil {
+		return nil
+	}
+
+	var errors []error
+
+	if len(errors) > 0 {
+		return DeleteQueueResponseMultiError(errors)
+	}
+
+	return nil
+}
+
+// DeleteQueueResponseMultiError is an error wrapping multiple validation
+// errors returned by DeleteQueueResponse.ValidateAll() if the designated
+// constraints aren't met.
+type DeleteQueueResponseMultiError []error
+
+// Error returns a concatenation of all the error messages it wraps.
+func (m DeleteQueueResponseMultiError) Error() string {
+	msgs := make([]string, 0, len(m))
+	for _, err := range m {
+		msgs = append(msgs, err.Error())
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// AllErrors returns a list of validation violation errors.
+func (m DeleteQueueResponseMultiError) AllErrors() []error { return m }
+
+// DeleteQueueResponseValidationError is the validation error returned by
+// DeleteQueueResponse.Validate if the designated constraints aren't met.
+type DeleteQueueResponseValidationError struct {
+	field  string
+	reason string
+	cause  error
+	key    bool
+}
+
+// Field function returns field value.
+func (e DeleteQueueResponseValidationError) Field() string { return e.field }
+
+// Reason function returns reason value.
+func (e DeleteQueueResponseValidationError) Reason() string { return e.reason }
+
+// Cause function returns cause value.
+func (e DeleteQueueResponseValidationError) Cause() error { return e.cause }
+
+// Key function returns key value.
+func (e DeleteQueueResponseValidationError) Key() bool { return e.key }
+
+// ErrorName returns error name.
+func (e DeleteQueueResponseValidationError) ErrorName() string {
+	return "DeleteQueueResponseValidationError"
+}
+
+// Error satisfies the builtin error interface
+func (e DeleteQueueResponseValidationError) Error() string {
+	cause := ""
+	if e.cause != nil {
+		cause = fmt.Sprintf(" | caused by: %v", e.cause)
+	}
+
+	key := ""
+	if e.key {
+		key = "key for "
+	}
+
+	return fmt.Sprintf(
+		"invalid %sDeleteQueueResponse.%s: %s%s",
+		key,
+		e.field,
+		e.reason,
+		cause)
+}
+
+var _ error = DeleteQueueResponseValidationError{}
+
+var _ interface {
+	Field() string
+	Reason() string
+	Key() bool
+	Cause() error
+	ErrorName() string
+} = DeleteQueueResponseValidationError{}
+
+// Validate checks the field values on UndeleteQueueRequest with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the first error encountered is returned, or nil if there are no violations.
+func (m *UndeleteQueueRequest) Validate() error {
+	return m.validate(false)
+}
+
+// ValidateAll checks the field values on UndeleteQueueRequest with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the result is a list of violation errors wrapped in
+// UndeleteQueueRequestMultiError, or nil if none found.
+func (m *UndeleteQueueRequest) ValidateAll() error {
+	return m.validate(true)
+}
+
+func (m *UndeleteQueueRequest) validate(all bool) error {
+	if m == nil {
+		return nil
+	}
+
+	var errors []error
+
+	if all {
+		switch v := interface{}(m.GetId()).(type) {
+		case interface{ ValidateAll() error }:
+			if err := v.ValidateAll(); err != nil {
+				errors = append(errors, UndeleteQueueRequestValidationError{
+					field:  "Id",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		case interface{ Validate() error }:
+			if err := v.Validate(); err != nil {
+				errors = append(errors, UndeleteQueueRequestValidationError{
+					field:  "Id",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		}
+	} else if v, ok := interface{}(m.GetId()).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			return UndeleteQueueRequestValidationError{
+				field:  "Id",
+				reason: "embedded message failed validation",
+				cause:  err,
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return UndeleteQueueRequestMultiError(errors)
+	}
+
+	return nil
+}
+
+// UndeleteQueueRequestMultiError is an error wrapping multiple validation
+// errors returned by UndeleteQueueRequest.ValidateAll() if the designated
+// constraints aren't met.
+type UndeleteQueueRequestMultiError []error
+
+// Error returns a concatenation of all the error messages it wraps.
+func (m UndeleteQueueRequestMultiError) Error() string {
+	msgs := make([]string, 0, len(m))
+	for _, err := range m {
+		msgs = append(msgs, err.Error())
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// AllErrors returns a list of validation violation errors.
+func (m UndeleteQueueRequestMultiError) AllErrors() []error { return m }
+
+// UndeleteQueueRequestValidationError is the validation error returned by
+// UndeleteQueueRequest.Validate if the designated constraints aren't met.
+type UndeleteQueueRequestValidationError struct {
+	field  string
+	reason string
+	cause  error
+	key    bool
+}
+
+// Field function returns field value.
+func (e UndeleteQueueRequestValidationError) Field() string { return e.field }
+
+// Reason function returns reason value.
+func (e UndeleteQueueRequestValidationError) Reason() string { return e.reason }
+
+// Cause function returns cause value.
+func (e UndeleteQueueRequestValidationError) Cause() error { return e.cause }
+
+// Key function returns key value.
+func (e UndeleteQueueRequestValidationError) Key() bool { return e.key }
+
+// ErrorName returns error name.
+func (e UndeleteQueueRequestValidationError) ErrorName() string {
+	return "UndeleteQueueRequestValidationError"
+}
+
+// Error satisfies the builtin error interface
+func (e UndeleteQueueRequestValidationError) Error() string {
+	cause := ""
+	if e.cause != nil {
+		cause = fmt.Sprintf(" | caused by: %v", e.cause)
+	}
+
+	key := ""
+	if e.key {
+		key = "key for "
+	}
+
+	return fmt.Sprintf(
+		"invalid %sUndeleteQueueRequest.%s: %s%s",
+		key,
+		e.field,
+		e.reason,
+		cause)
+}
+
+var _ error = UndeleteQueueRequestValidationError{}
+
+var _ interface {
+	Field() string
+	Reason() string
+	Key() bool
+	Cause() error
+	ErrorName() string
+} = UndeleteQueueRequestValidationError{}
+
+// Validate checks the field values on UndeleteQueueResponse with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the first error encountered is returned, or nil if there are no violations.
+func (m *UndeleteQueueResponse) Validate() error {
+	return m.validate(false)
+}
+
+// ValidateAll checks the field values on UndeleteQueueResponse with the rules
+// defined in the proto definition for this message. If any rules are
+// violated, the result is a list of violation errors wrapped in
+// UndeleteQueueResponseMultiError, or nil if none found.
+func (m *UndeleteQueueResponse) ValidateAll() error {
+	return m.validate(true)
+}
+
+func (m *UndeleteQueueResponse) validate(all bool) error {
+	if m == nil {
+		return nil
+	}
+
+	var errors []error
+
+	if all {
+		switch v := interface{}(m.GetQueue()).(type) {
+		case interface{ ValidateAll() error }:
+			if err := v.ValidateAll(); err != nil {
+				errors = append(errors, UndeleteQueueResponseValidationError{
+					field:  "Queue",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		case interface{ Validate() error }:
+			if err := v.Validate(); err != nil {
+				errors = append(errors, UndeleteQueueResponseValidationError{
+					field:  "Queue",
+					reason: "embedded message failed validation",
+					cause:  err,
+				})
+			}
+		}
+	} else if v, ok := interface{}(m.GetQueue()).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			return UndeleteQueueResponseValidationError{
+				field:  "Queue",
+				reason: "embedded message failed validation",
+				cause:  err,
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return UndeleteQueueResponseMultiError(errors)
+	}
+
+	return nil
+}
+
+// UndeleteQueueResponseMultiError is an error wrapping multiple validation
+// errors returned by UndeleteQueueResponse.ValidateAll() if the designated
+// constraints aren't met.
+type UndeleteQueueResponseMultiError []error
+
+// Error returns a concatenation of all the error messages it wraps.
+func (m UndeleteQueueResponseMultiError) Error() string {
+	msgs := make([]string, 0, len(m))
+	for _, err := range m {
+		msgs = append(msgs, err.Error())
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// AllErrors returns a list of validation violation errors.
+func (m UndeleteQueueResponseMultiError) AllErrors() []error { return m }
+
+// UndeleteQueueResponseValidationError is the validation error returned by
+// UndeleteQueueResponse.Validate if the designated constraints aren't met.
+type UndeleteQueueResponseValidationError struct {
+	field  string
+	reason string
+	cause  error
+	key    bool
+}
+
+// Field function returns field value.
+func (e UndeleteQueueResponseValidationError) Field() string { return e.field }
+
+// Reason function returns reason value.
+func (e UndeleteQueueResponseValidationError) Reason() string { return e.reason }
+
+// Cause function returns cause value.
+func (e UndeleteQueueResponseValidationError) Cause() error { return e.cause }
+
+// Key function returns key value.
+func (e UndeleteQueueResponseValidationError) Key() bool { return e.key }
+
+// ErrorName returns error name.
+func (e UndeleteQueueResponseValidationError) ErrorName() string {
+	return "UndeleteQueueResponseValidationError"
+}
+
+// Error satisfies the builtin error interface
+func (e UndeleteQueueResponseValidationError) Error() string {
+	cause := ""
+	if e.cause != nil {
+		cause = fmt.Sprintf(" | caused by: %v", e.cause)
+	}
+
+	key := ""
+	if e.key {
+		key = "key for "
+	}
+
+	return fmt.Sprintf(
+		"invalid %sUndeleteQueueResponse.%s: %s%s",
+		key,
+		e.field,
+		e.reason,
+		cause)
+}
+
+var _ error = UndeleteQueueResponseValidationError{}
+
+var _ interface {
+	Field() string
+	Reason() string
+	Key() bool
+	Cause() error
+	ErrorName() string
+} = UndeleteQueueResponseValidationError{}
+
 // Validate checks the field values on ListQueuesRequest with the rules defined
 // in the proto definition for this message. If any rules are violated, the
 // first error encountered is returned, or nil if there are no violations.
@@ -2354,6 +2880,8 @@ func (m *ResolveQueueRequest) validate(all bool) error {
 	var errors []error
 
 	// no validation rules for QueueName
+
+	// no validation rules for IncludeDeleted
 
 	switch v := m.QueueScope.(type) {
 	case *ResolveQueueRequest_RunId:

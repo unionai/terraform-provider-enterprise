@@ -181,8 +181,12 @@ func applyQueueToModel(data *QueueResourceModel, q *queue.Queue) diag.Diagnostic
 	data.Depth = types.Int64Value(int64(spec.GetDepth()))
 	data.Priority = queuePriorityToTerraform(spec.GetPriority())
 	data.Fairness = queueFairnessToTerraform(spec.GetFairness())
+	if data.Drain.IsNull() || data.Drain.IsUnknown() {
+		data.Drain = types.BoolValue(false)
+	}
 
 	data.State = queueStateToTerraform(q.GetStatus().GetState())
+	data.ClusterManaged = types.BoolValue(q.GetStatus().GetClusterManaged())
 	data.AvailableClusters = convertArrayToSetGetter(
 		q.GetStatus().GetAvailableClusters(),
 		func(c *common.ClusterIdentifier) string { return c.GetName() },
@@ -190,6 +194,7 @@ func applyQueueToModel(data *QueueResourceModel, q *queue.Queue) diag.Diagnostic
 
 	data.CreatedAt = timestampToTerraform(q.GetCreatedAt())
 	data.UpdatedAt = timestampToTerraform(q.GetUpdatedAt())
+	data.DeletedAt = timestampToTerraform(q.GetDeletedAt())
 
 	return diags
 }

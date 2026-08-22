@@ -15,8 +15,9 @@ import (
 //     membership check when the wildcard is used.
 //   - `cluster_pool_name` is left unset so it lands on the `default` pool, which the control
 //     plane creates on demand. Any other pool would have to exist already.
-//   - There is no CheckDestroy: destroying a queue only drains it, so the queue (and its name)
-//     survives. Each run therefore uses a random name and leaves one drained queue behind.
+//   - There is no CheckDestroy: destroying a queue requires `drain = true` to be applied first,
+//     and deletion can only finish once the control plane reports DRAINED. Each run therefore
+//     uses a random name.
 func TestAccQueueResource(t *testing.T) {
 	suffix := fmt.Sprintf("%06d", rand.Intn(1000000))
 	queueName := "tf-acc-queue-" + suffix

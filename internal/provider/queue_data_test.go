@@ -30,7 +30,8 @@ func TestQueueDataSource_Schema(t *testing.T) {
 
 	for _, attr := range []string{
 		"id", "cluster_pool_name", "clusters", "run_concurrency", "action_concurrency",
-		"depth", "priority", "fairness", "state", "available_clusters", "created_at", "updated_at",
+		"depth", "priority", "fairness", "state", "cluster_managed", "available_clusters",
+		"created_at", "updated_at", "deleted_at",
 	} {
 		if _, ok := s.Schema.Attributes[attr]; !ok {
 			t.Errorf("Expected '%s' attribute in schema", attr)
@@ -121,9 +122,11 @@ func queueDataSourceObjectType() tftypes.Object {
 			"priority":           tftypes.String,
 			"fairness":           tftypes.String,
 			"state":              tftypes.String,
+			"cluster_managed":    tftypes.Bool,
 			"available_clusters": tftypes.Set{ElementType: tftypes.String},
 			"created_at":         tftypes.String,
 			"updated_at":         tftypes.String,
+			"deleted_at":         tftypes.String,
 		},
 	}
 }
@@ -143,9 +146,11 @@ func newQueueDataSourceConfig(t *testing.T, name string) tfsdk.Config {
 			"priority":           tftypes.NewValue(tftypes.String, nil),
 			"fairness":           tftypes.NewValue(tftypes.String, nil),
 			"state":              tftypes.NewValue(tftypes.String, nil),
+			"cluster_managed":    tftypes.NewValue(tftypes.Bool, nil),
 			"available_clusters": nullSet,
 			"created_at":         tftypes.NewValue(tftypes.String, nil),
 			"updated_at":         tftypes.NewValue(tftypes.String, nil),
+			"deleted_at":         tftypes.NewValue(tftypes.String, nil),
 		}),
 	}
 }

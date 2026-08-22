@@ -25,6 +25,8 @@ const (
 	QueueService_UpdateQueueState_FullMethodName  = "/cloudidl.queue.QueueService/UpdateQueueState"
 	QueueService_ListQueues_FullMethodName        = "/cloudidl.queue.QueueService/ListQueues"
 	QueueService_WatchQueueMetrics_FullMethodName = "/cloudidl.queue.QueueService/WatchQueueMetrics"
+	QueueService_DeleteQueue_FullMethodName       = "/cloudidl.queue.QueueService/DeleteQueue"
+	QueueService_UndeleteQueue_FullMethodName     = "/cloudidl.queue.QueueService/UndeleteQueue"
 	QueueService_ResolveQueue_FullMethodName      = "/cloudidl.queue.QueueService/ResolveQueue"
 )
 
@@ -33,24 +35,65 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type QueueServiceClient interface {
 	// Create or update a queue.
+	// A queue cannot take the name of an existing cluster: that name belongs to the cluster's
+	// own implicit queue (see ClusterService.CreateCluster).
 	CreateQueue(ctx context.Context, in *CreateQueueRequest, opts ...grpc.CallOption) (*CreateQueueResponse, error)
 	// Update queue spec fully replaces existing spec.
+	// A cluster's co-named implicit queue is the exception: its clusters and cluster pool are
+	// managed by that cluster and any request changing either is rejected. Its other fields
+	// (concurrency, depth, priority, fairness) stay editable.
 	// Does not partially update only set fields!
 	// Client is expected to get entire spec using GetQueue method, update desired fields and
 	// then provide entire spec in UpdateQueue.
 	UpdateQueue(ctx context.Context, in *UpdateQueueRequest, opts ...grpc.CallOption) (*UpdateQueueResponse, error)
 	// Get a queue by name.
+	// Soft-deleted queues are returned too, carrying Queue.deleted_at, so a deleted
+	// queue's details stay reachable (e.g. from a run that once targeted it).
 	GetQueue(ctx context.Context, in *GetQueueRequest, opts ...grpc.CallOption) (*GetQueueResponse, error)
 	// Update queue status (drain / activate).
 	UpdateQueueState(ctx context.Context, in *UpdateQueueStateRequest, opts ...grpc.CallOption) (*UpdateQueueStateResponse, error)
 	// List queues within a scope.
+	// Soft-deleted queues are excluded unless the request filters on the deleted_at field:
+	// function EXISTS lists only soft-deleted queues (the only queues that carry
+	// Queue.deleted_at), function NOT_EXISTS is the default of live queues only.
+	// This is how a client discovers a deleted queue to pass to UndeleteQueue.
 	ListQueues(ctx context.Context, in *ListQueuesRequest, opts ...grpc.CallOption) (*ListQueuesResponse, error)
 	// Stream real-time queue metrics.
 	// This endpoint proxies metrics from leasor's QueueManager via internal API.
 	WatchQueueMetrics(ctx context.Context, in *WatchQueueMetricsRequest, opts ...grpc.CallOption) (QueueService_WatchQueueMetricsClient, error)
+	// Soft-delete a queue: the record is kept but marked as deleted, so the queue
+	// disappears from ResolveQueue (unless include_deleted is set) and from ListQueues.
+	// ListQueues can explicitly ask for deleted queues, and GetQueue keeps returning the
+	// queue with deleted_at set. A deleted queue is no longer scheduled on.
+	// The queue must be in DRAINED state, otherwise the request is rejected: drain it
+	// with UpdateQueueState first.
+	// A soft-deleted queue keeps its name reserved: CreateQueue with the same name is
+	// rejected as already existing until the queue is undeleted.
+	// Deleting an already deleted queue is rejected.
+	// A queue that is referenced as run.default_queue in settings at any scope cannot be
+	// deleted until those settings are updated or unset.
+	// The reserved "default" queue is no exception: it can be drained and deleted like any
+	// other queue — deleting it is how the reserved "default" pool is emptied of live queues
+	// so that the pool itself can be deleted (see ClusterPoolService.Delete). While it is
+	// deleted, runs that would fall back to it (no queue named and no run.default_queue
+	// setting) are rejected at creation. Nothing re-creates it implicitly; UndeleteQueue
+	// brings it back.
+	// A cluster's co-named implicit queue may be deleted while its cluster is still live, and
+	// is also deleted automatically when the cluster is (see ClusterService.DeleteCluster).
+	DeleteQueue(ctx context.Context, in *DeleteQueueRequest, opts ...grpc.CallOption) (*DeleteQueueResponse, error)
+	// Undelete removes the deletion mark from a soft-deleted queue, effectively re-creating
+	// it with the spec it had when it was deleted. The queue comes back in DRAINED state and
+	// has to be activated with UpdateQueueState to accept work again.
+	// Every cluster the queue routes to must be live and in the queue's cluster pool, and the
+	// pool itself must be live — a restored queue must never point at something that is gone.
+	// For a cluster's co-named queue that means the cluster has to be undeleted instead, which
+	// brings the queue back with it (see ClusterService.UndeleteCluster).
+	// Undeleting a queue that is not deleted is rejected.
+	UndeleteQueue(ctx context.Context, in *UndeleteQueueRequest, opts ...grpc.CallOption) (*UndeleteQueueResponse, error)
 	// Return the most narrow-scoped queue for given domain, project and queue name.
 	// Today, queue name is unique within an org, but we may lift this requirement
 	// and have multiple queues with same name, but different scopes in future.
+	// Soft-deleted queues resolve to NotFound unless include_deleted is set.
 	ResolveQueue(ctx context.Context, in *ResolveQueueRequest, opts ...grpc.CallOption) (*ResolveQueueResponse, error)
 }
 
@@ -139,6 +182,24 @@ func (x *queueServiceWatchQueueMetricsClient) Recv() (*WatchQueueMetricsResponse
 	return m, nil
 }
 
+func (c *queueServiceClient) DeleteQueue(ctx context.Context, in *DeleteQueueRequest, opts ...grpc.CallOption) (*DeleteQueueResponse, error) {
+	out := new(DeleteQueueResponse)
+	err := c.cc.Invoke(ctx, QueueService_DeleteQueue_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueServiceClient) UndeleteQueue(ctx context.Context, in *UndeleteQueueRequest, opts ...grpc.CallOption) (*UndeleteQueueResponse, error) {
+	out := new(UndeleteQueueResponse)
+	err := c.cc.Invoke(ctx, QueueService_UndeleteQueue_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *queueServiceClient) ResolveQueue(ctx context.Context, in *ResolveQueueRequest, opts ...grpc.CallOption) (*ResolveQueueResponse, error) {
 	out := new(ResolveQueueResponse)
 	err := c.cc.Invoke(ctx, QueueService_ResolveQueue_FullMethodName, in, out, opts...)
@@ -153,24 +214,65 @@ func (c *queueServiceClient) ResolveQueue(ctx context.Context, in *ResolveQueueR
 // for forward compatibility
 type QueueServiceServer interface {
 	// Create or update a queue.
+	// A queue cannot take the name of an existing cluster: that name belongs to the cluster's
+	// own implicit queue (see ClusterService.CreateCluster).
 	CreateQueue(context.Context, *CreateQueueRequest) (*CreateQueueResponse, error)
 	// Update queue spec fully replaces existing spec.
+	// A cluster's co-named implicit queue is the exception: its clusters and cluster pool are
+	// managed by that cluster and any request changing either is rejected. Its other fields
+	// (concurrency, depth, priority, fairness) stay editable.
 	// Does not partially update only set fields!
 	// Client is expected to get entire spec using GetQueue method, update desired fields and
 	// then provide entire spec in UpdateQueue.
 	UpdateQueue(context.Context, *UpdateQueueRequest) (*UpdateQueueResponse, error)
 	// Get a queue by name.
+	// Soft-deleted queues are returned too, carrying Queue.deleted_at, so a deleted
+	// queue's details stay reachable (e.g. from a run that once targeted it).
 	GetQueue(context.Context, *GetQueueRequest) (*GetQueueResponse, error)
 	// Update queue status (drain / activate).
 	UpdateQueueState(context.Context, *UpdateQueueStateRequest) (*UpdateQueueStateResponse, error)
 	// List queues within a scope.
+	// Soft-deleted queues are excluded unless the request filters on the deleted_at field:
+	// function EXISTS lists only soft-deleted queues (the only queues that carry
+	// Queue.deleted_at), function NOT_EXISTS is the default of live queues only.
+	// This is how a client discovers a deleted queue to pass to UndeleteQueue.
 	ListQueues(context.Context, *ListQueuesRequest) (*ListQueuesResponse, error)
 	// Stream real-time queue metrics.
 	// This endpoint proxies metrics from leasor's QueueManager via internal API.
 	WatchQueueMetrics(*WatchQueueMetricsRequest, QueueService_WatchQueueMetricsServer) error
+	// Soft-delete a queue: the record is kept but marked as deleted, so the queue
+	// disappears from ResolveQueue (unless include_deleted is set) and from ListQueues.
+	// ListQueues can explicitly ask for deleted queues, and GetQueue keeps returning the
+	// queue with deleted_at set. A deleted queue is no longer scheduled on.
+	// The queue must be in DRAINED state, otherwise the request is rejected: drain it
+	// with UpdateQueueState first.
+	// A soft-deleted queue keeps its name reserved: CreateQueue with the same name is
+	// rejected as already existing until the queue is undeleted.
+	// Deleting an already deleted queue is rejected.
+	// A queue that is referenced as run.default_queue in settings at any scope cannot be
+	// deleted until those settings are updated or unset.
+	// The reserved "default" queue is no exception: it can be drained and deleted like any
+	// other queue — deleting it is how the reserved "default" pool is emptied of live queues
+	// so that the pool itself can be deleted (see ClusterPoolService.Delete). While it is
+	// deleted, runs that would fall back to it (no queue named and no run.default_queue
+	// setting) are rejected at creation. Nothing re-creates it implicitly; UndeleteQueue
+	// brings it back.
+	// A cluster's co-named implicit queue may be deleted while its cluster is still live, and
+	// is also deleted automatically when the cluster is (see ClusterService.DeleteCluster).
+	DeleteQueue(context.Context, *DeleteQueueRequest) (*DeleteQueueResponse, error)
+	// Undelete removes the deletion mark from a soft-deleted queue, effectively re-creating
+	// it with the spec it had when it was deleted. The queue comes back in DRAINED state and
+	// has to be activated with UpdateQueueState to accept work again.
+	// Every cluster the queue routes to must be live and in the queue's cluster pool, and the
+	// pool itself must be live — a restored queue must never point at something that is gone.
+	// For a cluster's co-named queue that means the cluster has to be undeleted instead, which
+	// brings the queue back with it (see ClusterService.UndeleteCluster).
+	// Undeleting a queue that is not deleted is rejected.
+	UndeleteQueue(context.Context, *UndeleteQueueRequest) (*UndeleteQueueResponse, error)
 	// Return the most narrow-scoped queue for given domain, project and queue name.
 	// Today, queue name is unique within an org, but we may lift this requirement
 	// and have multiple queues with same name, but different scopes in future.
+	// Soft-deleted queues resolve to NotFound unless include_deleted is set.
 	ResolveQueue(context.Context, *ResolveQueueRequest) (*ResolveQueueResponse, error)
 }
 
@@ -195,6 +297,12 @@ func (UnimplementedQueueServiceServer) ListQueues(context.Context, *ListQueuesRe
 }
 func (UnimplementedQueueServiceServer) WatchQueueMetrics(*WatchQueueMetricsRequest, QueueService_WatchQueueMetricsServer) error {
 	return status.Errorf(codes.Unimplemented, "method WatchQueueMetrics not implemented")
+}
+func (UnimplementedQueueServiceServer) DeleteQueue(context.Context, *DeleteQueueRequest) (*DeleteQueueResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteQueue not implemented")
+}
+func (UnimplementedQueueServiceServer) UndeleteQueue(context.Context, *UndeleteQueueRequest) (*UndeleteQueueResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UndeleteQueue not implemented")
 }
 func (UnimplementedQueueServiceServer) ResolveQueue(context.Context, *ResolveQueueRequest) (*ResolveQueueResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveQueue not implemented")
@@ -322,6 +430,42 @@ func (x *queueServiceWatchQueueMetricsServer) Send(m *WatchQueueMetricsResponse)
 	return x.ServerStream.SendMsg(m)
 }
 
+func _QueueService_DeleteQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueServiceServer).DeleteQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueService_DeleteQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueServiceServer).DeleteQueue(ctx, req.(*DeleteQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueService_UndeleteQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UndeleteQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueServiceServer).UndeleteQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueService_UndeleteQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueServiceServer).UndeleteQueue(ctx, req.(*UndeleteQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _QueueService_ResolveQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ResolveQueueRequest)
 	if err := dec(in); err != nil {
@@ -366,6 +510,14 @@ var QueueService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListQueues",
 			Handler:    _QueueService_ListQueues_Handler,
+		},
+		{
+			MethodName: "DeleteQueue",
+			Handler:    _QueueService_DeleteQueue_Handler,
+		},
+		{
+			MethodName: "UndeleteQueue",
+			Handler:    _QueueService_UndeleteQueue_Handler,
 		},
 		{
 			MethodName: "ResolveQueue",

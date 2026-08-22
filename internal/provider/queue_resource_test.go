@@ -26,6 +26,7 @@ type mockQueueClient struct {
 	getFn         func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error)
 	updateFn      func(ctx context.Context, req *queue.UpdateQueueRequest) (*queue.UpdateQueueResponse, error)
 	updateStateFn func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error)
+	deleteFn      func(ctx context.Context, req *queue.DeleteQueueRequest) (*queue.DeleteQueueResponse, error)
 }
 
 func (m *mockQueueClient) CreateQueue(ctx context.Context, in *queue.CreateQueueRequest, opts ...grpc.CallOption) (*queue.CreateQueueResponse, error) {
@@ -42,6 +43,10 @@ func (m *mockQueueClient) UpdateQueue(ctx context.Context, in *queue.UpdateQueue
 
 func (m *mockQueueClient) UpdateQueueState(ctx context.Context, in *queue.UpdateQueueStateRequest, opts ...grpc.CallOption) (*queue.UpdateQueueStateResponse, error) {
 	return m.updateStateFn(ctx, in)
+}
+
+func (m *mockQueueClient) DeleteQueue(ctx context.Context, in *queue.DeleteQueueRequest, opts ...grpc.CallOption) (*queue.DeleteQueueResponse, error) {
+	return m.deleteFn(ctx, in)
 }
 
 // sampleQueue is a server response for a queue in the shape the tests configure.
@@ -85,16 +90,20 @@ func TestQueueResource_Schema(t *testing.T) {
 
 	for _, attr := range []string{
 		"id", "name", "cluster_pool_name", "clusters", "run_concurrency",
-		"action_concurrency", "depth", "priority", "fairness", "state",
-		"available_clusters", "created_at", "updated_at",
+		"action_concurrency", "depth", "priority", "fairness", "drain", "state",
+		"cluster_managed", "available_clusters", "created_at", "updated_at", "deleted_at",
 	} {
 		if _, ok := s.Schema.Attributes[attr]; !ok {
 			t.Errorf("Expected '%s' attribute in schema", attr)
 		}
 	}
 
+	if !s.Schema.Attributes["drain"].IsOptional() || !s.Schema.Attributes["drain"].IsComputed() {
+		t.Error("Expected 'drain' to be optional with a default")
+	}
+
 	// The server owns these; a practitioner must not be able to set them.
-	for _, attr := range []string{"state", "available_clusters", "created_at", "updated_at"} {
+	for _, attr := range []string{"state", "cluster_managed", "available_clusters", "created_at", "updated_at", "deleted_at"} {
 		a := s.Schema.Attributes[attr]
 		if !a.IsComputed() {
 			t.Errorf("Expected '%s' to be computed", attr)
@@ -157,6 +166,34 @@ func TestQueueResource_Create(t *testing.T) {
 	}
 	if spec.GetRunConcurrency() != 5 || spec.GetDepth() != 100 || spec.GetActionConcurrency() != 0 {
 		t.Errorf("unexpected concurrency knobs: %+v", spec)
+	}
+}
+
+func TestQueueResource_CreateDrained(t *testing.T) {
+	var captured *queue.CreateQueueRequest
+	r := &QueueResource{
+		org: "acme",
+		conn: &mockQueueClient{
+			createFn: func(ctx context.Context, req *queue.CreateQueueRequest) (*queue.CreateQueueResponse, error) {
+				captured = req
+				return &queue.CreateQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINED)}, nil
+			},
+		},
+	}
+
+	resp := &resource.CreateResponse{State: tfsdk.State{Schema: queueSchema(t).Schema}}
+	r.Create(context.Background(), resource.CreateRequest{
+		Plan: newQueuePlan(t, queuePlanValues{
+			name: "batch", pool: "default", clusters: []string{"*"},
+			priority: "max", fairness: "round_robin", drain: true,
+		}),
+	}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Create() errors: %v", resp.Diagnostics.Errors())
+	}
+	if captured.GetState() != queue.QueueState_QUEUE_STATE_DRAINED {
+		t.Errorf("expected create state DRAINED when drain=true, got %v", captured.GetState())
 	}
 }
 
@@ -318,7 +355,69 @@ func TestQueueResource_UpdateSendsClusterPool(t *testing.T) {
 	}
 }
 
-func TestQueueResource_ModifyPlanRejectsPoolChange(t *testing.T) {
+func TestQueueResource_UpdateDrainsWhenRequested(t *testing.T) {
+	var captured *queue.UpdateQueueStateRequest
+	r := &QueueResource{
+		org: "acme",
+		conn: &mockQueueClient{
+			updateFn: func(ctx context.Context, req *queue.UpdateQueueRequest) (*queue.UpdateQueueResponse, error) {
+				return &queue.UpdateQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
+			},
+			updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
+				captured = req
+				return &queue.UpdateQueueStateResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINING)}, nil
+			},
+		},
+	}
+
+	resp := &resource.UpdateResponse{State: tfsdk.State{Schema: queueSchema(t).Schema}}
+	r.Update(context.Background(), resource.UpdateRequest{
+		Plan: newQueuePlan(t, queuePlanValues{
+			name: "batch", pool: "default", clusters: []string{"*"},
+			priority: "max", fairness: "round_robin", drain: true,
+		}),
+	}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Update() errors: %v", resp.Diagnostics.Errors())
+	}
+	if captured == nil || captured.GetState() != queue.QueueState_QUEUE_STATE_DRAINING {
+		t.Fatalf("expected UpdateQueueState(DRAINING), got %+v", captured)
+	}
+}
+
+func TestQueueResource_UpdateActivatesWhenDrainCleared(t *testing.T) {
+	var captured *queue.UpdateQueueStateRequest
+	r := &QueueResource{
+		org: "acme",
+		conn: &mockQueueClient{
+			updateFn: func(ctx context.Context, req *queue.UpdateQueueRequest) (*queue.UpdateQueueResponse, error) {
+				return &queue.UpdateQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINED)}, nil
+			},
+			updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
+				captured = req
+				return &queue.UpdateQueueStateResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
+			},
+		},
+	}
+
+	resp := &resource.UpdateResponse{State: tfsdk.State{Schema: queueSchema(t).Schema}}
+	r.Update(context.Background(), resource.UpdateRequest{
+		Plan: newQueuePlan(t, queuePlanValues{
+			name: "batch", pool: "default", clusters: []string{"*"},
+			priority: "max", fairness: "round_robin", drain: false,
+		}),
+	}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Update() errors: %v", resp.Diagnostics.Errors())
+	}
+	if captured == nil || captured.GetState() != queue.QueueState_QUEUE_STATE_ACTIVE {
+		t.Fatalf("expected UpdateQueueState(ACTIVE), got %+v", captured)
+	}
+}
+
+func TestQueueResource_ModifyPlanRejectsActivePoolChange(t *testing.T) {
 	r := &QueueResource{org: "acme"}
 
 	resp := &resource.ModifyPlanResponse{}
@@ -331,7 +430,41 @@ func TestQueueResource_ModifyPlanRejectsPoolChange(t *testing.T) {
 	}, resp)
 
 	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected an error when cluster_pool_name changes")
+		t.Fatal("expected an error when cluster_pool_name changes while active")
+	}
+}
+
+func TestQueueResource_ModifyPlanAllowsDrainedPoolChange(t *testing.T) {
+	r := &QueueResource{org: "acme"}
+
+	resp := &resource.ModifyPlanResponse{}
+	r.ModifyPlan(context.Background(), resource.ModifyPlanRequest{
+		State: newQueueStateWithPoolState(t, "batch", "default", "drained", false),
+		Plan: newQueuePlan(t, queuePlanValues{
+			name: "batch", pool: "gpu-pool", clusters: []string{"gpu-a"},
+			priority: "medium", fairness: "round_robin",
+		}),
+	}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("ModifyPlan() errors: %v", resp.Diagnostics.Errors())
+	}
+}
+
+func TestQueueResource_ModifyPlanRejectsClusterManagedPoolChange(t *testing.T) {
+	r := &QueueResource{org: "acme"}
+
+	resp := &resource.ModifyPlanResponse{}
+	r.ModifyPlan(context.Background(), resource.ModifyPlanRequest{
+		State: newQueueStateWithPoolState(t, "cluster-a", "default", "drained", true),
+		Plan: newQueuePlan(t, queuePlanValues{
+			name: "cluster-a", pool: "gpu-pool", clusters: []string{"gpu-a"},
+			priority: "medium", fairness: "round_robin",
+		}),
+	}, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when a cluster-managed queue changes pool")
 	}
 }
 
@@ -352,17 +485,21 @@ func TestQueueResource_ModifyPlanAllowsSamePool(t *testing.T) {
 	}
 }
 
-func TestQueueResource_DeleteDrains(t *testing.T) {
-	var captured *queue.UpdateQueueStateRequest
+func TestQueueResource_DeleteDrainedQueue(t *testing.T) {
+	var captured *queue.DeleteQueueRequest
 	r := &QueueResource{
 		org: "acme",
 		conn: &mockQueueClient{
 			getFn: func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error) {
-				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
+				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINED)}, nil
 			},
 			updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
+				t.Fatal("UpdateQueueState should not be called for an already drained queue")
+				return nil, nil
+			},
+			deleteFn: func(ctx context.Context, req *queue.DeleteQueueRequest) (*queue.DeleteQueueResponse, error) {
 				captured = req
-				return &queue.UpdateQueueStateResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINING)}, nil
+				return &queue.DeleteQueueResponse{}, nil
 			},
 		},
 	}
@@ -374,61 +511,29 @@ func TestQueueResource_DeleteDrains(t *testing.T) {
 		t.Fatalf("Delete() errors: %v", resp.Diagnostics.Errors())
 	}
 	if captured == nil {
-		t.Fatal("UpdateQueueState was not called")
+		t.Fatal("DeleteQueue was not called")
 	}
-	if captured.GetState() != queue.QueueState_QUEUE_STATE_DRAINING {
-		t.Errorf("expected DRAINING, got %v", captured.GetState())
+	if captured.GetId().GetName() != "batch" {
+		t.Errorf("expected to delete queue batch, got %q", captured.GetId().GetName())
 	}
 	if resp.Diagnostics.WarningsCount() == 0 {
-		t.Error("expected a warning explaining the queue was drained rather than deleted")
+		t.Error("expected a warning explaining the queue was soft-deleted")
 	}
 }
 
-// Draining is still being rolled out; until it lands, destroy must not wedge a stack.
-func TestQueueResource_DeleteWhenDrainUnsupportedReleasesState(t *testing.T) {
-	for _, code := range []codes.Code{codes.Unimplemented, codes.Unavailable} {
-		t.Run(code.String(), func(t *testing.T) {
-			r := &QueueResource{
-				org: "acme",
-				conn: &mockQueueClient{
-					getFn: func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error) {
-						return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
-					},
-					updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
-						return nil, status.Error(code, "drain not available")
-					},
-				},
-			}
-
-			resp := &resource.DeleteResponse{State: newQueueState(t, "batch")}
-			r.Delete(context.Background(), resource.DeleteRequest{State: newQueueState(t, "batch")}, resp)
-
-			if resp.Diagnostics.HasError() {
-				t.Fatalf("expected destroy to succeed when draining is unsupported, got: %v", resp.Diagnostics.Errors())
-			}
-			if resp.Diagnostics.WarningsCount() == 0 {
-				t.Fatal("expected a warning explaining the queue was left behind")
-			}
-			detail := resp.Diagnostics.Warnings()[0].Detail()
-			if !strings.Contains(detail, "still active") {
-				t.Errorf("expected the warning to say the queue is still active, got: %s", detail)
-			}
-			if !strings.Contains(detail, "terraform import") {
-				t.Errorf("expected the warning to mention terraform import, got: %s", detail)
-			}
-		})
-	}
-}
-
-func TestQueueResource_DeleteAlreadyDrainedIsNoOp(t *testing.T) {
+func TestQueueResource_DeleteActiveQueueRequiresDrainIntent(t *testing.T) {
 	r := &QueueResource{
 		org: "acme",
 		conn: &mockQueueClient{
 			getFn: func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error) {
-				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINED)}, nil
+				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
 			},
 			updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
-				t.Fatal("UpdateQueueState should not be called for an already drained queue")
+				t.Fatal("UpdateQueueState should not be called unless drain=true is in state")
+				return nil, nil
+			},
+			deleteFn: func(ctx context.Context, req *queue.DeleteQueueRequest) (*queue.DeleteQueueResponse, error) {
+				t.Fatal("DeleteQueue should not be called until the queue is drained")
 				return nil, nil
 			},
 		},
@@ -437,15 +542,45 @@ func TestQueueResource_DeleteAlreadyDrainedIsNoOp(t *testing.T) {
 	resp := &resource.DeleteResponse{State: newQueueState(t, "batch")}
 	r.Delete(context.Background(), resource.DeleteRequest{State: newQueueState(t, "batch")}, resp)
 
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("Delete() errors: %v", resp.Diagnostics.Errors())
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when destroying an active queue without drain=true")
 	}
-	// The queue still exists even though we did not touch it, so the name is still taken.
-	if resp.Diagnostics.WarningsCount() == 0 {
-		t.Fatal("expected a warning that the already-retired queue still exists")
+	if detail := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, "drain = true") {
+		t.Errorf("expected drain=true guidance, got: %s", detail)
 	}
-	if detail := resp.Diagnostics.Warnings()[0].Detail(); !strings.Contains(detail, "terraform import") {
-		t.Errorf("expected the warning to mention terraform import, got: %s", detail)
+}
+
+func TestQueueResource_DeleteActiveQueueWithDrainIntentStartsDrainAndKeepsState(t *testing.T) {
+	var captured *queue.UpdateQueueStateRequest
+	r := &QueueResource{
+		org: "acme",
+		conn: &mockQueueClient{
+			getFn: func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error) {
+				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
+			},
+			updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
+				captured = req
+				return &queue.UpdateQueueStateResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINING)}, nil
+			},
+			deleteFn: func(ctx context.Context, req *queue.DeleteQueueRequest) (*queue.DeleteQueueResponse, error) {
+				t.Fatal("DeleteQueue should not be called until the queue is drained")
+				return nil, nil
+			},
+		},
+	}
+
+	state := newQueueStateWithPoolStateDrain(t, "batch", "default", "active", false, true)
+	resp := &resource.DeleteResponse{State: state}
+	r.Delete(context.Background(), resource.DeleteRequest{State: state}, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error while the queue is still draining")
+	}
+	if captured == nil || captured.GetState() != queue.QueueState_QUEUE_STATE_DRAINING {
+		t.Fatalf("expected UpdateQueueState(DRAINING), got %+v", captured)
+	}
+	if detail := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, "run destroy again") {
+		t.Errorf("expected retry guidance, got: %s", detail)
 	}
 }
 
@@ -472,10 +607,10 @@ func TestQueueResource_DeleteFailedPreconditionExplains(t *testing.T) {
 		org: "acme",
 		conn: &mockQueueClient{
 			getFn: func(ctx context.Context, req *queue.GetQueueRequest) (*queue.GetQueueResponse, error) {
-				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_ACTIVE)}, nil
+				return &queue.GetQueueResponse{Queue: sampleQueue("batch", queue.QueueState_QUEUE_STATE_DRAINED)}, nil
 			},
-			updateStateFn: func(ctx context.Context, req *queue.UpdateQueueStateRequest) (*queue.UpdateQueueStateResponse, error) {
-				return nil, status.Error(codes.FailedPrecondition, "cannot drain queue [batch]: it is configured as run.default_queue")
+			deleteFn: func(ctx context.Context, req *queue.DeleteQueueRequest) (*queue.DeleteQueueResponse, error) {
+				return nil, status.Error(codes.FailedPrecondition, "cannot delete queue [batch]: it is configured as run.default_queue")
 			},
 		},
 	}
@@ -562,10 +697,13 @@ func queueObjectType() tftypes.Object {
 			"depth":              tftypes.Number,
 			"priority":           tftypes.String,
 			"fairness":           tftypes.String,
+			"drain":              tftypes.Bool,
 			"state":              tftypes.String,
+			"cluster_managed":    tftypes.Bool,
 			"available_clusters": tftypes.Set{ElementType: tftypes.String},
 			"created_at":         tftypes.String,
 			"updated_at":         tftypes.String,
+			"deleted_at":         tftypes.String,
 		},
 	}
 }
@@ -579,6 +717,7 @@ type queuePlanValues struct {
 	depth             int64
 	priority          string
 	fairness          string
+	drain             bool
 }
 
 func stringSetValue(items []string) tftypes.Value {
@@ -603,10 +742,13 @@ func newQueuePlan(t *testing.T, v queuePlanValues) tfsdk.Plan {
 			"depth":              tftypes.NewValue(tftypes.Number, v.depth),
 			"priority":           tftypes.NewValue(tftypes.String, v.priority),
 			"fairness":           tftypes.NewValue(tftypes.String, v.fairness),
+			"drain":              tftypes.NewValue(tftypes.Bool, v.drain),
 			"state":              tftypes.NewValue(tftypes.String, nil),
+			"cluster_managed":    tftypes.NewValue(tftypes.Bool, nil),
 			"available_clusters": tftypes.NewValue(tftypes.Set{ElementType: tftypes.String}, nil),
 			"created_at":         tftypes.NewValue(tftypes.String, nil),
 			"updated_at":         tftypes.NewValue(tftypes.String, nil),
+			"deleted_at":         tftypes.NewValue(tftypes.String, nil),
 		}),
 	}
 }
@@ -617,6 +759,16 @@ func newQueueState(t *testing.T, name string) tfsdk.State {
 }
 
 func newQueueStateWithPool(t *testing.T, name, pool string) tfsdk.State {
+	t.Helper()
+	return newQueueStateWithPoolState(t, name, pool, "active", false)
+}
+
+func newQueueStateWithPoolState(t *testing.T, name, pool, state string, clusterManaged bool) tfsdk.State {
+	t.Helper()
+	return newQueueStateWithPoolStateDrain(t, name, pool, state, clusterManaged, false)
+}
+
+func newQueueStateWithPoolStateDrain(t *testing.T, name, pool, state string, clusterManaged bool, drain bool) tfsdk.State {
 	t.Helper()
 	return tfsdk.State{
 		Schema: queueSchema(t).Schema,
@@ -630,10 +782,13 @@ func newQueueStateWithPool(t *testing.T, name, pool string) tfsdk.State {
 			"depth":              tftypes.NewValue(tftypes.Number, 100),
 			"priority":           tftypes.NewValue(tftypes.String, "max"),
 			"fairness":           tftypes.NewValue(tftypes.String, "round_robin"),
-			"state":              tftypes.NewValue(tftypes.String, "active"),
+			"drain":              tftypes.NewValue(tftypes.Bool, drain),
+			"state":              tftypes.NewValue(tftypes.String, state),
+			"cluster_managed":    tftypes.NewValue(tftypes.Bool, clusterManaged),
 			"available_clusters": stringSetValue([]string{"cluster-a"}),
 			"created_at":         tftypes.NewValue(tftypes.String, "2026-01-02T03:04:05Z"),
 			"updated_at":         tftypes.NewValue(tftypes.String, "2026-01-02T03:04:05Z"),
+			"deleted_at":         tftypes.NewValue(tftypes.String, nil),
 		}),
 	}
 }
